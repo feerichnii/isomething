@@ -1,0 +1,15 @@
+# Apple-proprietary / large artifacts — never commit
+*.ipsw
+*.dmg
+research_commcenter/bin/
+research_commcenter/strings/
+research_commcenter/dyld/
+research_commcenter/logs/
+**/CommCenter
+**/CommCenterMobileHelper
+*.all.txt
+
+# Python
+.venv/
+__pycache__/
+*.pyc
