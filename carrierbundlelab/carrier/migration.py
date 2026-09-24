@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import plistlib
 import shutil
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
-from carrierbundlelab.carrier.inspector import CarrierBundleInspector
+from carrierbundlelab.carrier.archive import safe_extract_ipcc
 from carrierbundlelab.carrier.manifest import build_manifest, compare_manifests, write_manifest
 from carrierbundlelab.errors import MigrationError
 from carrierbundlelab.models import CarrierAsset, MigrationPlan
@@ -28,18 +30,17 @@ class CarrierLabMigrationService:
             shutil.rmtree(destination)
         shutil.copytree(original_tree, destination, symlinks=True)
 
-        inspector = CarrierBundleInspector()
         with tempfile.TemporaryDirectory(prefix="carrierlab_asset_") as tmp:
             asset_bundle = self._materialize_asset(Path(carrierlab.path), Path(tmp))
-            target = destination / asset_bundle.name
+            validate_carrierlab_bundle(asset_bundle)
+            target = destination / "CarrierLab.bundle"
             if target.exists():
                 if strategy == "abort":
                     raise MigrationError("CarrierLab already exists and strategy=abort")
                 if strategy == "preserve-and-replace":
-                    backup = destination / f"{asset_bundle.name}.previous"
-                    if backup.exists():
-                        shutil.rmtree(backup)
-                    shutil.move(str(target), str(backup))
+                    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                    preserved = destination / f"CarrierLab-preserved-{stamp}.bundle"
+                    shutil.move(str(target), str(preserved))
             if target.exists():
                 shutil.rmtree(target)
             shutil.copytree(asset_bundle, target, symlinks=True)
@@ -47,15 +48,14 @@ class CarrierLabMigrationService:
         before = build_manifest(original_tree)
         after = build_manifest(destination)
         diff = compare_manifests(before, after)
-        allowed = _allowed_carrierlab_paths(diff)
         unexpected = [
-            p for p in (diff.added + diff.removed + diff.modified + diff.symlink_target_changed)
-            if not _is_allowed_path(p)
+            path
+            for path in (diff.added + diff.removed + diff.modified + diff.symlink_target_changed)
+            if not _is_allowed_path(path)
         ]
         if unexpected:
             raise MigrationError(f"Unexpected migration diff outside CarrierLab scope: {unexpected[:5]}")
-        manifest_path = destination.parent / "manifest.json"
-        write_manifest(after, manifest_path)
+        write_manifest(after, destination.parent / "manifest.json")
         return MigrationPlan(
             original_tree=original_tree,
             desired_tree=destination,
@@ -63,30 +63,38 @@ class CarrierLabMigrationService:
             manifest=after,
             diff=diff,
             strategy=strategy,
-            allowed_paths=allowed,
+            allowed_paths={path for path in (diff.added + diff.removed + diff.modified) if _is_allowed_path(path)},
         )
 
     def _materialize_asset(self, source: Path, tmp: Path) -> Path:
         if source.suffix.lower() == ".ipcc":
-            import zipfile
-
-            with zipfile.ZipFile(source) as zf:
-                zf.extractall(tmp)
-            bundles = sorted((tmp / "Payload").glob("*.bundle")) or sorted(tmp.glob("**/*.bundle"))
+            safe_extract_ipcc(source, tmp)
+            bundles = sorted((tmp / "Payload").glob("*.bundle")) or sorted(path for path in tmp.glob("**/*.bundle") if path.is_dir())
             if len(bundles) != 1:
                 raise MigrationError(f"Expected exactly one bundle in IPCC, found {len(bundles)}")
             return bundles[0]
-        if source.is_dir() and source.suffix == ".bundle":
+        if source.is_dir() and source.name == "CarrierLab.bundle":
             return source
         raise MigrationError(f"Unsupported CarrierLab asset: {source}")
 
 
+def validate_carrierlab_bundle(bundle: Path) -> None:
+    if bundle.name != "CarrierLab.bundle":
+        raise MigrationError(f"Expected CarrierLab.bundle, got {bundle.name}")
+    info_path = bundle / "Info.plist"
+    carrier_path = bundle / "carrier.plist"
+    if not info_path.exists() or not carrier_path.exists():
+        raise MigrationError("CarrierLab.bundle requires Info.plist and carrier.plist")
+    with info_path.open("rb") as handle:
+        info = plistlib.load(handle)
+    with carrier_path.open("rb") as handle:
+        carrier = plistlib.load(handle)
+    if info.get("CFBundleIdentifier") != "com.apple.CarrierLab":
+        raise MigrationError("CFBundleIdentifier must be com.apple.CarrierLab")
+    sims = carrier.get("SupportedSIMs")
+    if not isinstance(sims, list):
+        raise MigrationError("SupportedSIMs must be a list")
+
+
 def _is_allowed_path(path: str) -> bool:
-    return path.startswith("CarrierLab.bundle") or path.startswith("CarrierLab.bundle.previous")
-
-
-def _allowed_carrierlab_paths(diff) -> set[str]:
-    return {
-        p for p in (diff.added + diff.removed + diff.modified + diff.symlink_target_changed)
-        if _is_allowed_path(p)
-    }
+    return path.startswith("CarrierLab.bundle") or path.startswith("CarrierLab-preserved-")

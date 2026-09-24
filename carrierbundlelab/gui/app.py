@@ -8,7 +8,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox
 
-from carrierbundlelab.carrier import CarrierAssetResolver, CarrierStateService
+from carrierbundlelab.carrier import CarrierAssetResolver
+from carrierbundlelab.carrier.state import CarrierStateService, format_carrier_state
 from carrierbundlelab.device import DeviceService
 
 
@@ -21,31 +22,21 @@ def run() -> None:
     def refresh() -> None:
         text.delete("1.0", tk.END)
         try:
-            device = DeviceService().get_device_info()
-            state = CarrierStateService().read_current_state()
-            decision = CarrierAssetResolver().explain(device)
-            lines = [
-                "CarrierBundleLab",
-                "",
-                f"Device: {device.product_type or '?'}",
-                f"iOS: {device.product_version or '?'} ({device.build_version or '?'})",
-                f"Hardware: {device.hardware_model or '?'}",
-                "",
-                "SIMs:",
-            ]
-            lines.extend(f"  SIM {sim.slot}: {sim.carrier_name or '?'}" for sim in state.sims)
-            if not state.sims:
-                lines.append("  unavailable")
-            lines.extend(
-                [
-                    "",
-                    f"Compatible asset: {decision.asset.path if decision.asset else 'none'}",
-                    f"Status: {'Compatible' if decision.ok else decision.reason}",
-                    "",
-                    "Use the CLI for Dry run / Install / Rescan / Verify / Restore.",
-                ]
+            devices = DeviceService().list_devices()
+            if len(devices) != 1:
+                text.insert("1.0", "Connect exactly one iPhone or use the CLI with --udid.")
+                return
+            session = DeviceService().connect(devices[0].udid)
+            decision = CarrierAssetResolver().explain(session.info)
+            state_text = format_carrier_state(CarrierStateService().read_current_state(session))
+            text.insert(
+                "1.0",
+                state_text
+                + "\n\n"
+                + f"Compatible asset: {decision.asset.path if decision.asset else 'none'}\n"
+                + f"Status: {'Compatible' if decision.ok else decision.reason}\n\n"
+                + "Use the CLI for dry-run, install, rescan, verify, and restore.",
             )
-            text.insert("1.0", "\n".join(lines))
         except Exception as exc:
             messagebox.showerror("CarrierBundleLab", str(exc))
 

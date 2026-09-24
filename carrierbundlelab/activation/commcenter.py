@@ -1,4 +1,4 @@
-"""CommCenter log monitor and parser."""
+"""Stateful CommCenter binding parser."""
 
 from __future__ import annotations
 
@@ -6,97 +6,145 @@ import json
 import re
 import subprocess
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
-from carrierbundlelab.models import BindingEvent
+RESOLVED_RE = re.compile(r"(?:Resolved path|kResolvedPath).*?([A-Za-z0-9_]+\.bundle)", re.I)
+LINK_RE = re.compile(r"(?:Linking Path|kLinkingPath)\s*:?\s*(\S+)", re.I)
+SLOT_RE = re.compile(r"(?:slot|sim)\s*[:= ]\s*([12])", re.I)
+REEVAL_RE = re.compile(r"re-evaluat\w*.*carrier bundle", re.I)
 
-MARKERS = {
-    "BindingEvaluator": re.compile(r"re-evaluat.*carrier bundle|carrier context binding|User data SIM has changed", re.I),
-    "Resolved path": re.compile(r"Resolved path|resolved_bundle_name|kResolvedPath", re.I),
-    "Linking Path": re.compile(r"Linking Path|kLinkingPath", re.I),
-    "Verification Result": re.compile(r"Verification Result|kOverrideBundleSuccess", re.I),
-    "Verification Skipped": re.compile(r"Verification Skipped", re.I),
-    "reload": re.compile(r"carrier bundle reload|carrier bundle update|OverlayBundle", re.I),
-}
-RESOLVED_RE = re.compile(
-    r"(?:Resolved path|resolved_bundle_name|matching_bundle_name|kResolvedPath).*?([A-Za-z0-9_]+\.bundle)",
-    re.I,
-)
-LINK_RE = re.compile(r"(?:Linking Path|kLinkingPath).*?([^\s]+)", re.I)
+
+@dataclass
+class BindingAttempt:
+    slot: int | None
+    started_at: datetime
+    resolved_path: str | None = None
+    linking_path: str | None = None
+    override_success: bool | None = None
+    override_failure: str | None = None
+    completed_at: datetime | None = None
 
 
 class CommCenterMonitor:
-    def __init__(self, log_path: Path | None = None) -> None:
+    def __init__(self, log_path: Path | None = None, udid: str | None = None) -> None:
         self.log_path = log_path
-        self._proc: subprocess.Popen | None = None
+        self.udid = udid
+        self._proc: subprocess.Popen[str] | None = None
+        self._handle = None
 
     def start(self) -> None:
+        if self._proc is not None:
+            return
+        if self.log_path and self.log_path.exists():
+            return
         if self.log_path is None:
-            self.log_path = Path("work") / "commcenter-live.jsonl"
+            self.log_path = Path("work") / (self.udid or "unknown") / "commcenter-live.jsonl"
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = self.log_path.open("w", encoding="utf-8")
-        self._proc = subprocess.Popen(
-            ["pymobiledevice3", "syslog", "live", "--format", "json"],
-            stdout=fh,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
+        args = ["pymobiledevice3", "syslog", "live", "--format", "json"]
+        if self.udid:
+            args.extend(["--udid", self.udid])
+        self._handle = self.log_path.open("w", encoding="utf-8")
+        self._proc = subprocess.Popen(args, stdout=self._handle, stderr=subprocess.DEVNULL, text=True)
 
-    def wait_for_binding(self, expected_bundle: str, timeout: int = 120) -> list[BindingEvent]:
+    def wait_for_binding(self, expected_bundle: str, timeout: int = 120) -> list[BindingAttempt]:
+        expected = _bundle_name(expected_bundle).lower()
         deadline = time.time() + timeout
         while time.time() < deadline:
-            events = self.events()
-            if any((event.resolved_path or "").lower().endswith(_bundle(expected_bundle).lower()) for event in events):
-                return events
-            time.sleep(1)
-        return self.events()
+            attempts = self.attempts()
+            if any((attempt.resolved_path or "").lower() == expected and attempt.override_success for attempt in attempts):
+                return attempts
+            time.sleep(0.2 if timeout < 5 else 1)
+        return self.attempts()
 
     def stop(self) -> None:
-        if self._proc:
+        if self._proc is not None:
             self._proc.terminate()
             try:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+            self._proc = None
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
 
-    def events(self) -> list[BindingEvent]:
+    def attempts(self) -> list[BindingAttempt]:
         if not self.log_path or not self.log_path.exists():
             return []
-        events: list[BindingEvent] = []
-        for line in self.log_path.read_text(errors="ignore").splitlines():
-            event = parse_line(line)
-            if event:
-                events.append(event)
-        return events
+        return correlate_attempts(self.log_path.read_text(errors="ignore").splitlines())
 
 
-def parse_line(line: str) -> BindingEvent | None:
-    raw = line
-    timestamp = None
+def correlate_attempts(lines: list[str]) -> list[BindingAttempt]:
+    open_by_slot: dict[int | None, BindingAttempt] = {}
+    attempts: list[BindingAttempt] = []
+    for line in lines:
+        parsed = _parse_record(line)
+        if parsed is None:
+            continue
+        message, slot = parsed
+        if REEVAL_RE.search(message):
+            attempt = BindingAttempt(slot=slot, started_at=datetime.now(UTC))
+            open_by_slot[slot] = attempt
+            attempts.append(attempt)
+            continue
+        attempt = open_by_slot.get(slot)
+        if attempt is None and slot is None and len(open_by_slot) == 1:
+            attempt = next(iter(open_by_slot.values()))
+        if attempt is None:
+            attempt = BindingAttempt(slot=slot, started_at=datetime.now(UTC))
+            open_by_slot[slot] = attempt
+            attempts.append(attempt)
+        resolved = RESOLVED_RE.search(message)
+        if resolved:
+            attempt.resolved_path = resolved.group(1)
+        link = LINK_RE.search(message)
+        if link:
+            attempt.linking_path = link.group(1)
+        if "kOverrideBundleSuccess" in message:
+            attempt.override_success = True
+            attempt.completed_at = datetime.now(UTC)
+        elif "kOverrideBundleFailure" in message or "OverlayWriteFailure" in message:
+            attempt.override_success = False
+            attempt.override_failure = message.strip()
+            attempt.completed_at = datetime.now(UTC)
+    return attempts
+
+
+def _parse_record(line: str) -> tuple[str, int | None] | None:
+    message = line
+    process = None
     if line.lstrip().startswith("{"):
         try:
             obj = json.loads(line)
-            raw = str(obj.get("message", line))
-            timestamp = str(obj.get("timestamp") or obj.get("time") or "") or None
         except Exception:
-            raw = line
-    if not any(pattern.search(raw) for pattern in MARKERS.values()):
+            return None
+        process = str(obj.get("process") or obj.get("subsystem") or obj.get("category") or "")
+        message = str(obj.get("message", ""))
+    if process and "commcenter" not in process.lower():
         return None
-    resolved = None
-    link = None
-    verification = None
-    m = RESOLVED_RE.search(raw)
-    if m:
-        resolved = m.group(1)
-    l = LINK_RE.search(raw)
-    if l:
-        link = l.group(1)
-    if "kOverrideBundleSuccess" in raw or "success" in raw.lower():
-        verification = "success"
-    elif "failure" in raw.lower():
-        verification = "failure"
-    return BindingEvent(timestamp=timestamp, resolved_path=resolved, linking_path=link, verification_result=verification, raw_line=raw)
+    if not _is_known_marker(message):
+        return None
+    slot_match = SLOT_RE.search(message)
+    slot = int(slot_match.group(1)) if slot_match else None
+    return message, slot
 
 
-def _bundle(name: str) -> str:
+def _is_known_marker(message: str) -> bool:
+    markers = (
+        "Resolved path",
+        "kResolvedPath",
+        "Linking Path",
+        "kLinkingPath",
+        "kOverrideBundleSuccess",
+        "kOverrideBundleFailure",
+        "OverlayWriteFailure",
+    )
+    if any(marker in message for marker in markers):
+        return True
+    return REEVAL_RE.search(message) is not None
+
+
+def _bundle_name(name: str) -> str:
     return name if name.endswith(".bundle") else f"{name}.bundle"

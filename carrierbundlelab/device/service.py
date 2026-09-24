@@ -1,4 +1,4 @@
-"""Device discovery and USB/lockdown access."""
+"""Device discovery. Carrier installation logic does not belong here."""
 
 from __future__ import annotations
 
@@ -6,73 +6,33 @@ import json
 import logging
 import shutil
 import subprocess
-from typing import Any
+from collections.abc import Callable
 
-from carrierbundlelab.errors import DeviceConnectionError
-from carrierbundlelab.models import DeviceInfo, DeviceSession, SimInfo
+from carrierbundlelab.device.session import DeviceSession
+from carrierbundlelab.errors import DeviceConnectionError, DeviceNotFoundError, MultipleDevicesError
+from carrierbundlelab.models import DeviceInfo
 
 log = logging.getLogger("device")
 
 
 class DeviceService:
-    """Thin wrapper around pymobiledevice3 with predictable models and timeouts."""
-
-    def __init__(self, timeout: int = 10) -> None:
+    def __init__(self, timeout: int = 10, lister: Callable[[], list[DeviceInfo]] | None = None) -> None:
         self.timeout = timeout
-        self._session: DeviceSession | None = None
+        self._lister = lister
 
     def list_devices(self) -> list[DeviceInfo]:
+        if self._lister is not None:
+            return self._lister()
         if not shutil.which("pymobiledevice3"):
             raise DeviceConnectionError("pymobiledevice3 not found")
         result = self._pmd("usbmux", "list")
-        devices: list[DeviceInfo] = []
-        try:
-            parsed = json.loads(result.stdout)
-            rows = parsed if isinstance(parsed, list) else parsed.get("DeviceList", [])
-            for row in rows:
-                udid = row.get("SerialNumber") or row.get("UDID") or row.get("Identifier")
-                devices.append(DeviceInfo(udid=udid, connection_type="USB"))
-        except Exception:
-            for line in result.stdout.splitlines():
-                if line.strip() and "UDID" not in line:
-                    devices.append(DeviceInfo(udid=line.split()[0], connection_type="USB"))
-        return devices
+        return _parse_device_list(result.stdout)
 
     def connect(self, udid: str | None = None) -> DeviceSession:
-        info = self.get_device_info(udid)
-        self._session = DeviceSession(info=info, raw={"udid": udid})
-        return self._session
-
-    def get_device_info(self, udid: str | None = None) -> DeviceInfo:
-        args = ["lockdown", "info", "--color", "false"]
-        if udid:
-            args.extend(["--udid", udid])
-        result = self._pmd(*args)
-        info = self._parse_lockdown_info(result.stdout)
-        log.info("Device detected: %s %s %s", info.product_type, info.product_version, info.build_version)
-        return info
-
-    def get_sim_info(self) -> list[SimInfo]:
-        # pymobiledevice3 does not expose a stable cross-version SIM schema through lockdown.
-        # Keep this best-effort and never fail the workflow solely because SIM details are absent.
-        sims: list[SimInfo] = []
-        try:
-            result = self._pmd("lockdown", "info", "com.apple.mobile.phone", "--color", "false")
-            data = self._parse_any(result.stdout)
-            if isinstance(data, dict):
-                sims.append(
-                    SimInfo(
-                        slot=1,
-                        iccid=_first(data, "ICCID", "IntegratedCircuitCardIdentity"),
-                        imsi=_first(data, "IMSI", "InternationalMobileSubscriberIdentity"),
-                        mcc=_first(data, "MCC", "MobileCountryCode"),
-                        mnc=_first(data, "MNC", "MobileNetworkCode"),
-                        carrier_name=_first(data, "CarrierName", "Carrier"),
-                    )
-                )
-        except Exception as exc:  # logged, but intentionally non-fatal
-            log.debug("SIM info unavailable: %s", exc)
-        return sims
+        devices = self.list_devices()
+        selected = _select_udid(devices, udid)
+        log.info("udid=%s selected for session", selected)
+        return DeviceSession(selected, timeout=self.timeout)
 
     def _pmd(self, *args: str) -> subprocess.CompletedProcess[str]:
         try:
@@ -89,39 +49,32 @@ class DeviceService:
             raise DeviceConnectionError(result.stderr.strip() or result.stdout.strip())
         return result
 
-    @staticmethod
-    def _parse_lockdown_info(stdout: str) -> DeviceInfo:
-        data = DeviceService._parse_any(stdout)
-        if not isinstance(data, dict):
-            data = {}
-            for line in stdout.splitlines():
-                if ":" in line:
-                    key, _, value = line.partition(":")
-                    data[key.strip()] = value.strip()
-        return DeviceInfo(
-            udid=_first(data, "UniqueDeviceID", "UDID"),
-            device_name=_first(data, "DeviceName"),
-            product_type=_first(data, "ProductType"),
-            product_version=_first(data, "ProductVersion"),
-            build_version=_first(data, "BuildVersion"),
-            hardware_model=_first(data, "HardwareModel", "BoardId"),
-            serial_number=_first(data, "SerialNumber"),
-            baseband_version=_first(data, "BasebandVersion"),
-            wifi_address=_first(data, "WiFiAddress"),
-            connection_type="USB",
-        )
 
-    @staticmethod
-    def _parse_any(stdout: str) -> Any:
-        try:
-            return json.loads(stdout)
-        except Exception:
-            return {}
+def _select_udid(devices: list[DeviceInfo], udid: str | None) -> str:
+    known = [device.udid for device in devices if device.udid]
+    if udid:
+        if udid not in known and known:
+            raise DeviceNotFoundError(f"UDID {udid} is not connected")
+        return udid
+    if len(known) > 1:
+        raise MultipleDevicesError("Multiple iPhones connected; pass --udid")
+    if len(known) == 1:
+        return known[0]
+    raise DeviceNotFoundError("No iPhone connected")
 
 
-def _first(data: dict[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        value = data.get(key)
-        if value not in (None, ""):
-            return str(value)
-    return None
+def _parse_device_list(stdout: str) -> list[DeviceInfo]:
+    devices: list[DeviceInfo] = []
+    try:
+        parsed = json.loads(stdout)
+        rows = parsed if isinstance(parsed, list) else parsed.get("DeviceList", [])
+        for row in rows:
+            udid = row.get("SerialNumber") or row.get("UDID") or row.get("Identifier")
+            if udid:
+                devices.append(DeviceInfo(udid=str(udid), connection_type="USB"))
+        return devices
+    except Exception:
+        for line in stdout.splitlines():
+            if line.strip() and "UDID" not in line:
+                devices.append(DeviceInfo(udid=line.split()[0], connection_type="USB"))
+    return devices

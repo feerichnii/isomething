@@ -1,5 +1,12 @@
 from .binding import BindingVerifier
-from .commcenter import CommCenterMonitor
-from .rescan import CarrierRescanService, RescanResult
+from .commcenter import BindingAttempt, CommCenterMonitor
+from .rescan import CarrierRescanService, RescanResult, RescanStatus
 
-__all__ = ["BindingVerifier", "CarrierRescanService", "CommCenterMonitor", "RescanResult"]
+__all__ = [
+    "BindingAttempt",
+    "BindingVerifier",
+    "CarrierRescanService",
+    "CommCenterMonitor",
+    "RescanResult",
+    "RescanStatus",
+]

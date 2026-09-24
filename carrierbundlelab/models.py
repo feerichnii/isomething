@@ -35,12 +35,6 @@ class SimInfo:
     carrier_bundle_version: str | None = None
 
 
-@dataclass
-class DeviceSession:
-    info: DeviceInfo
-    raw: Any | None = None
-
-
 @dataclass(frozen=True)
 class InstalledBundle:
     name: str
@@ -62,6 +56,8 @@ class CarrierState:
     preferences: CarrierPreferenceState = field(default_factory=CarrierPreferenceState)
     resolved_bundle: str | None = None
     resolved_path: str | None = None
+    linking_path: str | None = None
+    override_result: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +74,12 @@ class TreeManifest:
     files: dict[str, FileManifestEntry] = field(default_factory=dict)
     directories: dict[str, FileManifestEntry] = field(default_factory=dict)
     symlinks: dict[str, FileManifestEntry] = field(default_factory=dict)
+    created_at: str | None = None
+    udid: str | None = None
+    product_type: str | None = None
+    hardware_model: str | None = None
+    product_version: str | None = None
+    build_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ class BundleInspection:
     compatibility: dict[str, Any] = field(default_factory=dict)
     overrides: list[str] = field(default_factory=list)
     manifest: TreeManifest = field(default_factory=TreeManifest)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -123,9 +126,18 @@ class CompatibilityDecision:
 
 @dataclass(frozen=True)
 class TransportProbe:
-    ok: bool
-    checks: dict[str, bool]
+    available: bool
+    backend: str
+    sync_service_available: bool = False
+    staging_available: bool = False
+    canary_successful: bool = False
+    reason: str | None = None
+    checks: dict[str, bool] = field(default_factory=dict)
     messages: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.available
 
 
 @dataclass(frozen=True)
@@ -169,6 +181,7 @@ class TransactionState(str, Enum):
     NEW = "NEW"
     DEVICE_CONNECTED = "DEVICE_CONNECTED"
     PROBED = "PROBED"
+    COMPATIBILITY_VERIFIED = "COMPATIBILITY_VERIFIED"
     BACKUP_STARTED = "BACKUP_STARTED"
     BACKUP_VERIFIED = "BACKUP_VERIFIED"
     DESIRED_TREE_READY = "DESIRED_TREE_READY"
@@ -176,22 +189,22 @@ class TransactionState(str, Enum):
     INSTALL_FINISHED = "INSTALL_FINISHED"
     READBACK_VERIFIED = "READBACK_VERIFIED"
     RESCAN_REQUESTED = "RESCAN_REQUESTED"
+    BINDING_OBSERVED = "BINDING_OBSERVED"
     BINDING_VERIFIED = "BINDING_VERIFIED"
     COMMITTED = "COMMITTED"
     FAILED = "FAILED"
-    ROLLBACK_REQUIRED = "ROLLBACK_REQUIRED"
-    ROLLBACK_STARTED = "ROLLBACK_STARTED"
-    ROLLBACK_VERIFIED = "ROLLBACK_VERIFIED"
-    INTERRUPTED = "INTERRUPTED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+    RESTORE_STARTED = "RESTORE_STARTED"
+    RESTORE_VERIFIED = "RESTORE_VERIFIED"
+    ROLLED_BACK = "ROLLED_BACK"
 
 
 class BindingStatus(str, Enum):
-    FILESYSTEM_INSTALLED = "FILESYSTEM_INSTALLED"
-    FILESYSTEM_VERIFIED = "FILESYSTEM_VERIFIED"
-    RESCAN_TRIGGERED = "RESCAN_TRIGGERED"
-    BINDING_OBSERVED = "BINDING_OBSERVED"
-    BINDING_VERIFIED = "BINDING_VERIFIED"
-    INSTALLED_NOT_ACTIVATED = "INSTALLED_NOT_ACTIVATED"
+    WAITING = "WAITING"
+    OBSERVED = "OBSERVED"
+    VERIFIED = "VERIFIED"
+    FAILED = "FAILED"
+    TIMEOUT = "TIMEOUT"
 
 
 @dataclass(frozen=True)

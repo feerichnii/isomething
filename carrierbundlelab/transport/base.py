@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from carrierbundlelab.device.session import DeviceSession
 from carrierbundlelab.models import (
     CleanupResult,
-    DeviceSession,
     ExportResult,
     InstallResult,
     TransportProbe,

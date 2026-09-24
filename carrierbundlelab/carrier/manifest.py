@@ -6,12 +6,13 @@ import hashlib
 import json
 import os
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 
-from carrierbundlelab.models import FileManifestEntry, ManifestDiff, TreeManifest
+from carrierbundlelab.models import DeviceInfo, FileManifestEntry, ManifestDiff, TreeManifest
 
 
-def build_manifest(root: Path) -> TreeManifest:
+def build_manifest(root: Path, device: DeviceInfo | None = None) -> TreeManifest:
     root = Path(root)
     files: dict[str, FileManifestEntry] = {}
     directories: dict[str, FileManifestEntry] = {}
@@ -35,7 +36,17 @@ def build_manifest(root: Path) -> TreeManifest:
                 sha256=_sha256(path),
                 mode=mode,
             )
-    return TreeManifest(files=files, directories=directories, symlinks=symlinks)
+    return TreeManifest(
+        files=files,
+        directories=directories,
+        symlinks=symlinks,
+        created_at=datetime.now(UTC).isoformat(),
+        udid=device.udid if device else None,
+        product_type=device.product_type if device else None,
+        hardware_model=device.hardware_model if device else None,
+        product_version=device.product_version if device else None,
+        build_version=device.build_version if device else None,
+    )
 
 
 def compare_manifests(before: TreeManifest, after: TreeManifest) -> ManifestDiff:
@@ -76,6 +87,12 @@ def read_manifest(path: Path) -> TreeManifest:
         files={k: FileManifestEntry(**v) for k, v in data.get("files", {}).items()},
         directories={k: FileManifestEntry(**v) for k, v in data.get("directories", {}).items()},
         symlinks={k: FileManifestEntry(**v) for k, v in data.get("symlinks", {}).items()},
+        created_at=data.get("created_at"),
+        udid=data.get("udid"),
+        product_type=data.get("product_type"),
+        hardware_model=data.get("hardware_model"),
+        product_version=data.get("product_version"),
+        build_version=data.get("build_version"),
     )
 
 
@@ -95,8 +112,14 @@ def _flatten(manifest: TreeManifest) -> dict[str, FileManifestEntry]:
     return out
 
 
-def _manifest_to_dict(manifest: TreeManifest) -> dict[str, dict[str, dict]]:
+def _manifest_to_dict(manifest: TreeManifest) -> dict:
     return {
+        "created_at": manifest.created_at,
+        "udid": manifest.udid,
+        "product_type": manifest.product_type,
+        "hardware_model": manifest.hardware_model,
+        "product_version": manifest.product_version,
+        "build_version": manifest.build_version,
         "files": {k: asdict(v) for k, v in manifest.files.items()},
         "directories": {k: asdict(v) for k, v in manifest.directories.items()},
         "symlinks": {k: asdict(v) for k, v in manifest.symlinks.items()},

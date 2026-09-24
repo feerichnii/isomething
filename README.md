@@ -30,29 +30,19 @@ python -m pip install -e '.[dev]'
 
 ```bash
 carrierlab device list
-carrierlab device info
-carrierlab sim info
-
-carrierlab carrier state
-carrierlab carrier list
-
+carrierlab device info --udid <UDID>
+carrierlab carrier state --udid <UDID>
 carrierlab bundle inspect FILE
-carrierlab bundle resolve
-
-carrierlab transport probe
-
-carrierlab carrier backup
-carrierlab carrier plan FILE
-carrierlab carrier install FILE --dry-run
-carrierlab carrier install FILE
-carrierlab carrier rescan
-carrierlab carrier verify --log commcenter.jsonl --bundle CarrierLab
-carrierlab carrier restore
-
-carrierlab transaction list
-carrierlab transaction show ID
-carrierlab transaction recover ID
+carrierlab bundle check FILE --udid <UDID>
+carrierlab transport probe --udid <UDID>
+carrierlab carrier install FILE --udid <UDID> --dry-run
+carrierlab carrier install FILE --udid <UDID>
+carrierlab carrier verify --log commcenter.jsonl --expected CarrierLab.bundle
+carrierlab carrier restore --udid <UDID>
+carrierlab transaction recover <TRANSACTION_ID> --udid <UDID>
 ```
+
+`COMMITTED` requires a verified backup, a matching readback, and CommCenter `kOverrideBundleSuccess`. A resolved path alone stays `OBSERVED` / `WAITING`. When more than one iPhone is connected, pass `--udid`.
 
 For local orchestration tests without an iPhone, set:
 
