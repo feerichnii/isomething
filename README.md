@@ -1,7 +1,9 @@
-# isomething — iOS 27 carrier-bundle binding research
+# CarrierBundleLab
 
-Reverse-engineering of how iOS 27 (iPhone14,7 / build 24A437) selects a carrier bundle,
-and an honest `carrierctl` tool to observe/verify binding over USB from a Mac.
+Service-first Python toolkit for laboratory work with iOS carrier bundles on owned USB-connected devices.
+It includes bundle inspection, compatibility resolution, transaction journaling, verified backups,
+manifest diffing, constrained transport interfaces, CommCenter binding verification, recovery, and a
+minimal GUI shell backed by the same services as the CLI.
 
 ## Key result
 
@@ -16,18 +18,57 @@ There is **no** USB / lockdown / Darwin-notification API to force a specific bun
 [`research/FINDINGS.md`](research/FINDINGS.md) and
 [`research/bundlelinks_callflow.md`](research/bundlelinks_callflow.md).
 
-## carrierctl
+## Install
 
 ```bash
-pip install -U pymobiledevice3
-python3 carrierctl/carrierctl.py device
-python3 carrierctl/carrierctl.py status --subscription 1
-python3 carrierctl/carrierctl.py verify --log <captured.jsonl> --bundle CarrierLab
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[dev]'
 ```
 
-`bind` / `reset` drive the only legitimate path (present matching SIM → trigger
-re-evaluation via Airplane-mode toggle → verify from the device log). They do **not**
-fabricate a "force" that iOS does not expose.
+## CLI
+
+```bash
+carrierlab device list
+carrierlab device info
+carrierlab sim info
+
+carrierlab carrier state
+carrierlab carrier list
+
+carrierlab bundle inspect FILE
+carrierlab bundle resolve
+
+carrierlab transport probe
+
+carrierlab carrier backup
+carrierlab carrier plan FILE
+carrierlab carrier install FILE --dry-run
+carrierlab carrier install FILE
+carrierlab carrier rescan
+carrierlab carrier verify --log commcenter.jsonl --bundle CarrierLab
+carrierlab carrier restore
+
+carrierlab transaction list
+carrierlab transaction show ID
+carrierlab transaction recover ID
+```
+
+For local orchestration tests without an iPhone, set:
+
+```bash
+export CARRIERLAB_MOCK_TREE=/path/to/local/carrier-tree
+export CARRIERLAB_MOCK_UDID=mock-udid
+```
+
+The real AirTraffic backend currently fails closed until a verified project-specific transport is
+plugged in. The code deliberately does **not** expose arbitrary protected-path writing.
+
+## Tests
+
+```bash
+python -m pytest -q
+```
 
 ## Not included
 

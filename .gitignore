@@ -13,3 +13,6 @@ research_commcenter/logs/
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+*.egg-info/
+work/

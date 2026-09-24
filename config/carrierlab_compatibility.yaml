@@ -1,0 +1,11 @@
+ios27:
+  min_version: "27.0"
+  max_version: "27.99"
+  hardware_groups:
+    group_d74:
+      hardware_models:
+        - D74AP
+        - D73AP
+        - D28AP
+        - D27AP
+      asset: assets/carrierlab/CarrierLab-72.0-iOS27-D74.ipcc

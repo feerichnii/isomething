@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carrierbundlelab"
+version = "0.1.0"
+description = "Safe lab tooling for iOS carrier bundle inspection, planning, transport, activation, and recovery"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pymobiledevice3>=4.0.0",
+  "PyYAML>=6.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+carrierlab = "carrierbundlelab.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["carrierbundlelab*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
